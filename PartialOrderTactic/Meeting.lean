@@ -38,18 +38,18 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
       if let some (β, e₁, e₂) := (← instantiateMVars ty).le? then
         -- TODO: transparency issues? look at polyrith
         -- Check for less-than-equal
-        if ← isDefEq α β then
+        if ← withTransparency (← read).red <| isDefEq α β then
             -- TODO: does this work?
             -- the "atoms" here will eventually be our vertex set
-            let _ := addAtom e₁
-            let _ := addAtom e₂
-            return out.push (e₁, e₂)
+            -- let _ := addAtom e₁
+            -- let _ := addAtom e₂
+            return out.push ((← addAtom e₁).2, (← addAtom e₂).2)
 
       -- Check for equalities
       if let some (β, e₁, e₂) := (← instantiateMVars ty).eq? then
-        if ← isDefEq α β then
-            return (out.push (e₁, e₂)).push (e₂, e₁)
-        --   return out.push ((← addAtom e₁).2, (← addAtom e₂).2)
+        if ← withTransparency (← read).red <| isDefEq α β then
+            -- return (out.push (e₁, e₂)).push (e₂, e₁)
+          return out.push ((← addAtom e₁).2, (← addAtom e₂).2)
       pure out
     let mut out := #[]
     if !only then
