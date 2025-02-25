@@ -60,21 +60,35 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
         out ← processHyp (← inferType hyp) out
     pure (e₁, e₂, out)
 
--- def dfs (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
---     : MetaM (Array (Expr × Expr)) :=
--- sorry
+def dfs (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
+    : AtomM (Array (Expr × Expr)) := do
+    -- match edges with
+    -- | v₁ × g => logInfo f!"{g}"
+    -- | _ => logInfo f!""
+
+    let rec
+    getNeighbors (tgt: Expr) (e: Array (Expr × Expr)) (out: Array (Expr × Expr)) := do
+      for edge in e do
+        if ← isDefEq edge.1 tgt then
+          logInfo f!"{← delab edge.1}"
+          logInfo f!"{← delab edge.2}"
+          return out.push edge
+      pure out
+    let mut out := #[]
+    out ← getNeighbors v₁ edges out
+    pure out
 
 
 def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
     (traceOnly := false) : MetaM (Except MVarId (Unit)) := do
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges) ← parseContext only hyps (← g.getType)
-    --let relevant_edges ← dfs v₁ v₂ edges
-    logInfo f!"{← delab v₁}"
-    logInfo f!"{← delab v₂}"
-    for edge in edges do
-      logInfo f!"{← delab edge.1}"
-      logInfo f!"{← delab edge.2}"
+    let relevant_edges ← dfs v₁ v₂ edges
+    -- logInfo f!"{← delab v₁}"
+    -- logInfo f!"{← delab v₂}"
+    -- for edge in edges do
+    --   logInfo f!"{← delab edge.1}"
+    --   logInfo f!"{← delab edge.2}"
 
     pure (.ok .unit)
 
