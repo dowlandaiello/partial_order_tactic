@@ -66,10 +66,10 @@ structure dfs_data where
   discovered : Array (Expr)
 
 def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
-    : StateT dfs_data MetaM (Option Unit) := do
+    : MetaM (Option Unit) := do
 
   let rec
-  getNeighbors (tgt: Expr) := do
+  getNeighbors (tgt: Expr) : MetaM (Array (Expr × Expr)) := do
     let mut out := #[]
     for edge in edges do
       if ← isDefEq edge.1 tgt then
@@ -79,19 +79,24 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
     return out
 
   let rec
-  dfs_loop (node : Expr) := do
+  dfs_loop (node : Expr) (current_discovered : Array Expr) (current_path : Array (Expr × Expr)) : MetaM (Option Unit) := do
     let neighbors ← getNeighbors node
-    let st ← get
-    let updated_discovered ← pure {st with discovered := st.discovered.push node}
-    if neighbors.size == 0 then
-      let updated_path_so_far ← pure {st with path_so_far:= st.path_so_far.extract 0 (st.path_so_far.size - 1)}
-
-
+    let new_discovered := current_discovered.push node
+    -- if neighbors.size == 0 then
+    --   let updated_path_so_far ← pure {st with path_so_far:= st.path_so_far.extract 0 (st.path_so_far.size - 1)}
 
     for neighbor in neighbors do
+      if !(new_discovered.contains neighbor.2) then
+        let new_path := current_path.push neighbor
+        let out ← dfs_loop neighbor.2 new_discovered new_path
 
-  dfs_loop v₁
+
+  let mut path_so_far : Array (Expr × Expr) := #[]
+  let mut discovered : Array (Expr) := #[]
+
 #check Meta.State
+
+#check PUnit
 
 def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
     (traceOnly := false) : MetaM (Except MVarId (Unit)) := do
