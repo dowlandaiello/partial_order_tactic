@@ -66,7 +66,7 @@ structure dfs_data where
   discovered : Array (Expr)
 
 def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
-    : MetaM (Option Unit) := do
+    : MetaM (Option (Array (Expr × Expr))) := do
 
   let rec
   getNeighbors (tgt: Expr) : MetaM (Array (Expr × Expr)) := do
@@ -79,20 +79,25 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
     return out
 
   let rec
-  dfs_loop (node : Expr) (current_discovered : Array Expr) (current_path : Array (Expr × Expr)) : MetaM (Option Unit) := do
+  dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × Expr))) := do
     let neighbors ← getNeighbors node
-    let new_discovered := current_discovered.push node
-    -- if neighbors.size == 0 then
-    --   let updated_path_so_far ← pure {st with path_so_far:= st.path_so_far.extract 0 (st.path_so_far.size - 1)}
+    let mut current_data := {current_data with discovered := current_data.discovered.push node}
 
     for neighbor in neighbors do
-      if !(new_discovered.contains neighbor.2) then
-        let new_path := current_path.push neighbor
-        let out ← dfs_loop neighbor.2 new_discovered new_path
+    -- only look at undiscovered neighbors
+      if !(current_data.discovered.contains neighbor.2) then
+        current_data := {current_data with path_so_far := current_data.path_so_far.push neighbor}
+        if ← isDefEq v₂ neighbor.2 then
+          return (some current_data.path_so_far) -- destination reached
+        else match ← dfs_loop neighbor.2 current_data with
+          | some final_data => return some final_data -- destination reached at a later step
+          | none => -- next step is a dead end: need to backtrack
+            current_data := {current_data with path_so_far := current_data.path_so_far.extract 0 (current_data.path_so_far.size - 1)}
 
+    -- no neighbors worked: this step is a dead end
+    return none
 
-  let mut path_so_far : Array (Expr × Expr) := #[]
-  let mut discovered : Array (Expr) := #[]
+  return ← dfs_loop v₁ {path_so_far := #[], discovered := #[]}
 
 #check Meta.State
 
@@ -102,12 +107,12 @@ def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
     (traceOnly := false) : MetaM (Except MVarId (Unit)) := do
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges) ← parseContext only hyps (← g.getType)
-    let relevant_edges ← dfs_outer v₁ v₂ edges
-    -- logInfo f!"{← delab v₁}"
-    -- logInfo f!"{← delab v₂}"
-    -- for edge in edges do
-    --   logInfo f!"{← delab edge.1}"
-    --   logInfo f!"{← delab edge.2}"
+    match ← dfs_outer v₁ v₂ edges with
+    | some path_to_dest =>
+      for edge in path_to_dest do
+        logInfo f!"{← delab edge.1}"
+        logInfo f!"{← delab edge.2}"
+    | none => return (Except.ok Unit.unit)
 
     pure (.ok .unit)
 
