@@ -23,8 +23,17 @@ inductive Source where
   /-- `fvar h` refers to hypothesis `h` from the local context. -/
   | fvar : FVarId → Source
 
+-- Parses local context and hypotheses (provided by client).
+--  > Params
+--     > only : if true, parseContext ignores local context and only parses hypotheses
+--     > hyps : list of hypotheses provided by client
+--     > tgt : target inequality (a ≤ b)
+--
+--  > Returns
+--     > (e₁, e₂, out) : e₁ = a, e₂ = b, out is an array of Expr × Expr × Expr, where
+--       each element represents a hypothesis a ≤ b.
 def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
-    AtomM (Expr × Expr × Array (Expr × Expr)) := do
+    AtomM (Expr × Expr × Array (Expr × (Expr × Expr))) := do
     let fail {α} : AtomM α := throwError "bad"
     let some (α, e₁, e₂) := (← whnfR <|← instantiateMVars tgt).le? | fail
     let .sort u ← instantiateMVars (← whnf (← inferType α)) | unreachable!
@@ -35,7 +44,7 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
     -- let sα ← synthInstanceQ (q(PartialOrder $α) : Q(Type v))
     let rec
     /-- Parses a hypothesis and adds it to the `out` list. -/
-    processHyp ty (out: Array (Expr × Expr)) := do
+    processHyp ty (out: Array (Expr × (Expr × Expr))) := do
       if let some (β, e₁, e₂) := (← instantiateMVars ty).le? then
         -- TODO: transparency issues? look at polyrith
         -- Check for less-than-equal
@@ -44,52 +53,53 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
             -- the "atoms" here will eventually be our vertex set
             -- let _ := addAtom e₁
             -- let _ := addAtom e₂
-            return out.push ((← addAtom e₁).2, (← addAtom e₂).2)
+            return out.push ((← addAtom ty).2, (← addAtom e₁).2, (← addAtom e₂).2)
 
       -- Check for equalities
       if let some (β, e₁, e₂) := (← instantiateMVars ty).eq? then
         if ← withTransparency (← read).red <| isDefEq α β then
             -- return (out.push (e₁, e₂)).push (e₂, e₁)
-          return (out.push ((← addAtom e₁).2, (← addAtom e₂).2)).push (e₂, e₁ )
+          return (out.push ((← addAtom ty).2, (← addAtom e₁).2, (← addAtom e₂).2)).push (ty, e₂, e₁ )
       pure out
+
     let mut out := #[]
     if !only then
         for ldecl in ← getLCtx do
-        out ← processHyp ldecl.type out
+          out ← processHyp ldecl.type out
     for hyp in hyps do
         out ← processHyp (← inferType hyp) out
     pure (e₁, e₂, out)
 
 
 structure dfs_data where
-  path_so_far : Array (Expr × Expr)
+  path_so_far : Array (Expr × (Expr × Expr))
   discovered : Array (Expr)
 
-def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
-    : MetaM (Option (Array (Expr × Expr))) := do
+def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)))
+    : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
 
   let rec
-  getNeighbors (tgt: Expr) : MetaM (Array (Expr × Expr)) := do
+  getNeighbors (tgt: Expr) : MetaM (Array (Expr × (Expr × Expr))) := do
     let mut out := #[]
     for edge in edges do
-      if ← isDefEq edge.1 tgt then
+      if ← isDefEq edge.2.1 tgt then
           -- logInfo f!"{← delab edge.1}"
           -- logInfo f!"{← delab edge.2}"
         return out.push edge
     return out
 
   let rec
-  dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × Expr))) := do
+  dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
     let neighbors ← getNeighbors node
     let mut current_data := {current_data with discovered := current_data.discovered.push node}
 
     for neighbor in neighbors do
     -- only look at undiscovered neighbors
-      if !(current_data.discovered.contains neighbor.2) then
+      if !(current_data.discovered.contains neighbor.2.2) then
         current_data := {current_data with path_so_far := current_data.path_so_far.push neighbor}
-        if ← isDefEq v₂ neighbor.2 then
+        if ← isDefEq v₂ neighbor.2.2 then
           return (some current_data.path_so_far) -- destination reached
-        else match ← dfs_loop neighbor.2 current_data with
+        else match ← dfs_loop neighbor.2.2 current_data with
           | some final_data => return some final_data -- destination reached at a later step
           | none => -- next step is a dead end: need to backtrack
             current_data := {current_data with path_so_far := current_data.path_so_far.extract 0 (current_data.path_so_far.size - 1)}
@@ -104,19 +114,21 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × Expr))
 #check PUnit
 
 def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
-    (traceOnly := false) : MetaM (Except MVarId (Unit)) := do
+    (traceOnly := false) : MetaM (Except MVarId (Expr)) := do
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges) ← parseContext only hyps (← g.getType)
     match ← dfs_outer v₁ v₂ edges with
     | some path_to_dest =>
+      let mut new_goal ← mkAppM ``LE.le #[v₁, v₁] -- new_goal = v₁ ≤ v₁
       for edge in path_to_dest do
-        logInfo f!"{← delab edge.1}"
-        logInfo f!"{← delab edge.2}"
-    | none => return (Except.ok Unit.unit)
-
-    pure (.ok .unit)
-
-
+        if let some (α, e₁, e₂) := (edge.1).le? then -- is there a better way to check .le?
+          new_goal ← mkAppM ``le_trans #[new_goal, edge.1] -- transitivity
+        else if let some (α, e₁, e₂) := (edge.1).eq? then
+          new_goal ← mkAppM ``Eq.subst #[new_goal, edge.1] -- substitute equality into prev ineq
+        -- logInfo f!"{← delab edge.2.1}"
+        -- logInfo f!"{← delab edge.2.2}"
+      pure (.ok new_goal)
+    | none => return (Except.error g) -- placeholder return, what to return instead of g?
 
 
 syntax "partiarith" (&" only")? (" [" term,* "]")? : tactic
