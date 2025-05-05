@@ -33,18 +33,19 @@ inductive Source where
 --     > (e₁, e₂, out) : e₁ = a, e₂ = b, out is an array of Expr × Expr × Expr, where
 --       each element represents a hypothesis a ≤ b.
 def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
-    AtomM (Expr × Expr × Array (Expr × (Expr × Expr))) := do
+    AtomM (Expr × Expr × Array (Expr × (Expr × Expr)) × Nat) := do
     let fail {α} : AtomM α := throwError "bad"
     let some (α, e₁, e₂) := (← whnfR <|← instantiateMVars tgt).le? | fail
     let .sort u ← instantiateMVars (← whnf (← inferType α)) | unreachable!
     let some v := u.dec | throwError "not a type{indentExpr α}"
     have α : Q(Type v) := α
     have e₁ : Q($α) := e₁; have e₂ : Q($α) := e₂
+
     -- TODO: probably use this at some point
     -- let sα ← synthInstanceQ (q(PartialOrder $α) : Q(Type v))
     let rec
     /-- Parses a hypothesis and adds it to the `out` list. -/
-    processHyp ty (out: Array (Expr × (Expr × Expr))) := do
+    processHyp ty n (out: Array (Expr × (Expr × Expr))) := do
       if let some (β, e₁, e₂) := (← instantiateMVars ty).le? then
         -- TODO: transparency issues? look at polyrith
         -- Check for less-than-equal
@@ -53,22 +54,34 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
             -- the "atoms" here will eventually be our vertex set
             -- let _ := addAtom e₁
             -- let _ := addAtom e₂
+            let mut e₁_new := true
+            let mut e₂_new := true
+            for h in out do
+              if e₁_new ∧ (h.2.1 == e₁ ∨ h.2.2 == e₁) then
+                e₁_new := false
+              if e₂_new ∧ (h.2.1 == e₂ ∨ h.2.2 == e₂) then
+                e₂_new := false
+              if !e₁_new ∧ !e₂_new then
+                break
+            if e₁_new then
+              let n := n + 1
             return out.push ((← addAtom ty).2, (← addAtom e₁).2, (← addAtom e₂).2)
 
       -- Check for equalities
-      if let some (β, e₁, e₂) := (← instantiateMVars ty).eq? then
+      else if let some (β, e₁, e₂) := (← instantiateMVars ty).eq? then
         if ← withTransparency (← read).red <| isDefEq α β then
             -- return (out.push (e₁, e₂)).push (e₂, e₁)
           return (out.push ((← addAtom ty).2, (← addAtom e₁).2, (← addAtom e₂).2)).push (ty, e₂, e₁ )
       pure out
 
+    let mut n := 0
     let mut out := #[]
     if !only then
         for ldecl in ← getLCtx do
-          out ← processHyp ldecl.type out
+          out ← processHyp ldecl.type n out
     for hyp in hyps do
-        out ← processHyp (← inferType hyp) out
-    pure (e₁, e₂, out)
+        out ← processHyp (← inferType hyp) n out
+    pure (e₁, e₂, out, n)
 
 
 structure dfs_data where
@@ -88,6 +101,7 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
         return out.push edge
     return out
 
+  let num_edges := (edges.size)*(edges.size - 1)/2
   let rec
   dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
     let neighbors ← getNeighbors node
@@ -103,9 +117,9 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
           | some final_data => return some final_data -- destination reached at a later step
           | none => -- next step is a dead end: need to backtrack
             current_data := {current_data with path_so_far := current_data.path_so_far.extract 0 (current_data.path_so_far.size - 1)}
-
     -- no neighbors worked: this step is a dead end
     return none
+  termination_by edges.size - current_data.discovered.size
 
   return ← dfs_loop v₁ {path_so_far := #[], discovered := #[]}
 
@@ -139,8 +153,11 @@ elab_rules : tactic
     let hyps ← hyps.map (·.getElems) |>.getD #[] |>.mapM (elabTerm · none)
     let traceMe ← Lean.isTracingEnabledFor `Meta.Tactic.partiarith
     match ← partiarith (← getMainGoal) onlyTk.isSome hyps traceMe with
-    | .ok .unit =>
-      replaceMainGoal []
+    | .ok new_goal =>
+      let m ← mkFreshExprMVar (← inferType new_goal) -- (userName := `goal)
+      m.mvarId!.assign new_goal
+      -- let g ← instantiateMVars m
+      replaceMainGoal [m.mvarId!]
       -- TODO replace this with finishing the goal using an appropriate proof term
       --if !traceMe then Lean.Elab.Tactic.closeMainGoal `partiarith proof
     | .error g => replaceMainGoal [g]
