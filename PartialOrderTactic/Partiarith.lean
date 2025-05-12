@@ -60,7 +60,9 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
       -- Check for equalities
       else if let some (β, e₁, e₂) := (← instantiateMVars (← inferType ty)).eq? then
         if ← withTransparency (← read).red <| isDefEq α β then
-          return (out.push (ty, (← addAtom e₁).2, (← addAtom e₂).2)).push (ty, e₂, e₁)
+          let h₁₂ ← mkAppM `le_of_eq #[ty]
+          let h₂₁ ← mkAppM `le_of_eq #[(← mkAppM `Eq.symm #[ty])]
+          return (out.push (h₁₂, (← addAtom e₁).2, (← addAtom e₂).2)).push (h₂₁, e₂, e₁)
       pure out
 
     let mut out := #[]
@@ -71,8 +73,8 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
         out ← processHyp hyp out
 
     let nodes := (← get).atoms
-    for edge in out do
-      logInfo f!"{← delab edge.1}"
+    -- for edge in out do
+    --   logInfo f!"{← delab edge.1}"
     pure (e₁, e₂, out, nodes)
 
 
@@ -106,7 +108,7 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
       if ← isDefEq edge.2.1 tgt then
           -- logInfo f!"{← delab edge.1}"
           -- logInfo f!"{← delab edge.2}"
-        return out.push edge
+        out := out.push edge
     return out
 
   let rec
@@ -121,22 +123,27 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
    --       v₂, or none if no path was found.
    -/
   dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
+    -- logInfo f!"dfs_loop call : {← delab node}"
     let neighbors ← getNeighbors node
+    -- for neighbor in neighbors do
+      -- logInfo f!"neighbor {← delab neighbor.2.2}"
     for neighbor in neighbors do
     -- only look at undiscovered neighbors
       match current_data.to_discover.indexOf? neighbor.2.2 with
-      | none => return none
+      | none =>
+        -- logInfo f!"{← delab neighbor.2.2} has already been discovered!"
+        continue
       | some i =>
-        let mut current_data := {current_data with to_discover := current_data.to_discover.feraseIdx i}
-        current_data := {current_data with path_so_far := current_data.path_so_far.push neighbor}
+        -- logInfo f!"{← delab neighbor.2.2}"
+        let current_data := {current_data with to_discover := current_data.to_discover.feraseIdx i}
+        let add_to_path := {current_data with path_so_far := current_data.path_so_far.push neighbor}
         if ← isDefEq v₂ neighbor.2.2 then
           -- destination reached
-          return (some current_data.path_so_far)
-        else match ← dfs_loop neighbor.2.2 current_data with
-          | some final_data => return some final_data -- destination reached at a later step
-          | none => -- next step is a dead end: need to backtrack
-            current_data := {current_data with path_so_far := current_data.path_so_far.pop}
+          return (some add_to_path.path_so_far)
+        if let some final_data ← dfs_loop neighbor.2.2 add_to_path then
+          return some final_data -- destination reached at a later step
     -- no neighbors worked: this step is a dead end
+    -- logInfo "did we reach here"
     return none
   termination_by current_data.to_discover.size
   decreasing_by
@@ -144,6 +151,16 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
 
   -- Begin depth-first search.
   return ← dfs_loop v₁ {path_so_far := #[], to_discover := (nodes.erase v₁)}
+
+def proof_from_path (path : Array (Expr × Expr × Expr)) : Option (MetaM Expr) := do
+  let proofs := path.map (λ x => x.1)
+  match proofs[0]? with
+    | none => none
+    | some first_proof =>
+      return Array.foldlM (λ a b : Expr => (mkAppM `le_trans #[a, b])) first_proof (proofs.erase first_proof)
+
+
+
 
 /-- Polyrith for posets.
  --  > Params
@@ -161,22 +178,25 @@ def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges, nodes) ← parseContext only hyps (← g.getType)
     match ← dfs_outer v₁ v₂ edges nodes with
-    | some path_to_dest =>
-      for hyp in path_to_dest do
-        logInfo f!"{← delab hyp.1}"
-      let mut new_goal ← mkAppM ``LE.le #[v₁, v₁] -- new_goal = v₁ ≤ v₁
-      -- logInfo f!"{← delab new_goal}"
-      for edge in path_to_dest do
-        -- logInfo f!"{← delab edge.1}"
-        if let some (_, _, _) := (edge.1).le? then
-          new_goal := ← mkAppM ``le_trans #[new_goal, edge.1] -- transitivity
-        else if let some (_,_,_) := (edge.1).eq? then
-          new_goal := ← mkAppM ``Eq.subst #[new_goal, edge.1] -- substitute equality into prev ineq
-      -- logInfo f!"{← delab new_goal}"
-      -- logInfo f!"{← delab edge.2.2}"
-      pure (.ok new_goal)
-    | none => return (Except.error g)
+    | some path_to_dest => match (proof_from_path path_to_dest) with
+      | none => return (.error g)
+      | some proof_program => return (.ok (← proof_program))
 
+      -- -- logInfo "Path: "
+      -- -- for hyp in path_to_dest do
+      -- --   logInfo f!"{← delab hyp.1}"
+      -- let mut new_goal ← mkAppM ``LE.le #[v₁, v₁] -- new_goal = v₁ ≤ v₁
+      -- logInfo f!"{← Lean.Meta.ppExpr new_goal}"
+      -- for edge in path_to_dest do
+      --  logInfo f!"{← delab edge.1}"
+      --   if let some (_, _, _) := (edge.1).le? then
+      --     new_goal := ← mkAppM ``le_trans #[new_goal, edge.1] -- transitivity
+      --   else if let some (_,_,_) := (edge.1).eq? then
+      --     new_goal := ← mkAppM ``Eq.subst #[edge.1, new_goal] -- substitute equality into prev ineq
+      --  logInfo f!"{← Lean.Meta.ppExpr new_goal}"
+      -- -- logInfo f!"{← delab edge.2.2}"
+      -- pure (.ok new_goal)
+    | none => return (Except.error g)
 
 syntax "partiarith" (&" only")? (" [" term,* "]")? : tactic
 
@@ -188,7 +208,9 @@ elab_rules : tactic
     let g ← getMainGoal
     match ← partiarith g onlyTk.isSome hyps traceMe with
     | .ok new_goal =>
+      logInfo f!"{← Lean.Meta.ppExpr new_goal}"
       Lean.Elab.Tactic.closeMainGoal `partiarith new_goal
+      --g.assign new_goal
       --if !traceMe then Lean.Elab.Tactic.closeMainGoal `partiarith proof
     | .error g => replaceMainGoal [g]
 
