@@ -1,22 +1,24 @@
+/-
+Copyright (c) 2025 Joseph Qian and Dhruv Ashok. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Cool
+-/
 import Lean
 import Mathlib.Order.Defs
 import Mathlib.Util.AtomM
 
+/-
+  TODO: Notes
+-/
+
 namespace Mathlib.Tactic.Partiarith
-open Lean Meta Qq
-open AtomM PrettyPrinter
+open Lean Meta
+open Qq AtomM PrettyPrinter
 initialize registerTraceClass `Meta.Tactic.partiarith
 
--- TODO: test that this LE recognizer works
+
 @[inline] def le? (p : Expr) : Option (Expr × Expr × Expr) :=
   p.app3? ``LE
-
-/-- The possible hypothesis sources for a proof. -/
-inductive Source where
-  /-- `input n` refers to the `n`'th input `ai` in `polyrith [a1, ..., an]`. -/
-  | input : Nat → Source
-  /-- `fvar h` refers to hypothesis `h` from the local context. -/
-  | fvar : FVarId → Source
 
 /-- Parses local context and hypotheses (provided by client).
  --  > Params
@@ -37,9 +39,6 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
     let some v := u.dec | throwError "not a type{indentExpr α}"
     have α : Q(Type v) := α
     have e₁ : Q($α) := e₁; have e₂ : Q($α) := e₂
-
-    -- TODO: probably use this at some point
-    -- let sα ← synthInstanceQ (q(PartialOrder $α) : Q(Type v))
     let rec
     /-- Parses a hypothesis and adds it to the `out` list.
      --  > Params
@@ -51,7 +50,6 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
      -/
     processHyp (ty : Expr) (out: Array (Expr × (Expr × Expr))) := do
       if let some (β, e₁, e₂) := (← instantiateMVars (← inferType ty)).le? then
-        -- TODO: transparency issues? look at polyrith
         -- Check for less-than-equal
         if ← withTransparency (← read).red <| isDefEq α β then
             -- the "atoms" here will eventually be our vertex set
@@ -73,14 +71,12 @@ def parseContext (only: Bool) (hyps: Array Expr) (tgt: Expr) :
         out ← processHyp hyp out
 
     let nodes := (← get).atoms
-    -- for edge in out do
-    --   logInfo f!"{← delab edge.1}"
     pure (e₁, e₂, out, nodes)
 
 
-structure dfs_data where
-  path_so_far : Array (Expr × (Expr × Expr))
-  to_discover : Array (Expr)
+structure DfsData where
+  pathSoFar : Array (Expr × (Expr × Expr))
+  toDiscover : Array (Expr)
 
 /-- Performs a depth-first search over a directed graph representing the local context
  -- and user-defined hypotheses. The nodes of the graph are elements of the poset and
@@ -94,11 +90,11 @@ structure dfs_data where
  --    Note: the parameters of dfs_outer are the outputs of parseContext.
  --
  --  > Returns
- --     > path_so_far : an Array (Expr × (Expr × Expr)) representing a path from v₁ to
+ --     > pathSoFar : an Array (Expr × (Expr × Expr)) representing a path from v₁ to
  --       v₂, or none if no path was found.
  -/
-def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))) (nodes : Array Expr)
-    : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
+def dfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))) (nodes : Array Expr)
+    (trace := false) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
   let mut nodes := nodes
   let rec
   /-- Returns an Array containing the outgoing edges of a node `tgt` -/
@@ -106,8 +102,6 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
     let mut out := #[]
     for edge in edges do
       if ← isDefEq edge.2.1 tgt then
-          -- logInfo f!"{← delab edge.1}"
-          -- logInfo f!"{← delab edge.2}"
         out := out.push edge
     return out
 
@@ -115,49 +109,53 @@ def dfs_outer (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr)
   /-- Recursively performs depth-first search on the directed graph.
    --  > Params
    --     > node : the next node to be explored by the DFS algorithm
-   --     > current_data : a dfs_data structure representing the current state of the
+   --     > currentData : a dfs_data structure representing the current state of the
             DFS.
    --
    --  > Returns
-   --     > path_so_far : an Array (Expr × (Expr × Expr)) representing a path from v₁ to
+   --     > pathSoFar : an Array (Expr × (Expr × Expr)) representing a path from v₁ to
    --       v₂, or none if no path was found.
    -/
-  dfs_loop (node : Expr) (current_data : dfs_data) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
-    -- logInfo f!"dfs_loop call : {← delab node}"
+  dfsLoop (node : Expr) (currentData : DfsData) :
+    MetaM (Option (Array (Expr × (Expr × Expr)))) :=
+  do
     let neighbors ← getNeighbors node
-    -- for neighbor in neighbors do
-      -- logInfo f!"neighbor {← delab neighbor.2.2}"
     for neighbor in neighbors do
     -- only look at undiscovered neighbors
-      match current_data.to_discover.indexOf? neighbor.2.2 with
-      | none =>
-        -- logInfo f!"{← delab neighbor.2.2} has already been discovered!"
-        continue
+      match currentData.toDiscover.indexOf? neighbor.2.2 with
+      | none => continue
       | some i =>
-        -- logInfo f!"{← delab neighbor.2.2}"
-        let current_data := {current_data with to_discover := current_data.to_discover.feraseIdx i}
-        let add_to_path := {current_data with path_so_far := current_data.path_so_far.push neighbor}
+        let currentData := {currentData with toDiscover := currentData.toDiscover.feraseIdx i}
+        let addToPath := {currentData with pathSoFar := currentData.pathSoFar.push neighbor}
         if ← isDefEq v₂ neighbor.2.2 then
           -- destination reached
-          return (some add_to_path.path_so_far)
-        if let some final_data ← dfs_loop neighbor.2.2 add_to_path then
-          return some final_data -- destination reached at a later step
+          return (some addToPath.pathSoFar)
+        if let some finalData ← dfsLoop neighbor.2.2 addToPath then
+          return some finalData -- destination reached at a later step
     -- no neighbors worked: this step is a dead end
-    -- logInfo "did we reach here"
     return none
-  termination_by current_data.to_discover.size
-  decreasing_by
-    {rw [Array.size_feraseIdx]; apply Nat.sub_one_lt; apply Nat.ne_of_gt; apply Fin.size_pos; exact i;}
+  termination_by currentData.toDiscover.size
+  decreasing_by {
+    rw [Array.size_feraseIdx]
+    apply Nat.sub_one_lt
+    apply Nat.ne_of_gt
+    apply Fin.size_pos;
+    exact i
+    }
 
   -- Begin depth-first search.
-  return ← dfs_loop v₁ {path_so_far := #[], to_discover := (nodes.erase v₁)}
+  let path ← dfsLoop v₁ {pathSoFar := #[], toDiscover := (nodes.erase v₁)}
+  -- if trace then logInfo traceString
+  return path
 
-def proof_from_path (path : Array (Expr × Expr × Expr)) : Option (MetaM Expr) := do
-  let proofs := path.map (λ x => x.1)
+
+def proofFromPath (path : Array (Expr × Expr × Expr)) : Option (MetaM Expr) := do
+  let proofs := path.map (fun x => x.1)
   match proofs[0]? with
     | none => none
-    | some first_proof =>
-      return Array.foldlM (λ a b : Expr => (mkAppM `le_trans #[a, b])) first_proof (proofs.erase first_proof)
+    | some firstProof =>
+    return Array.foldlM (fun a b : Expr => (mkAppM `le_trans #[a, b]))
+      firstProof (proofs.erase firstProof)
 
 
 
@@ -171,31 +169,17 @@ def proof_from_path (path : Array (Expr × Expr × Expr)) : Option (MetaM Expr) 
  --     > traceOnly : if true, debugging messages will be printed.
  --
  --  > Returns
- --     > new_goal : a proof of `g`, or none if `g` cannot be proved.
+ --     > newGoal : a proof of `g`, or none if `g` cannot be proved.
  -/
 def partiarith (g : MVarId) (only : Bool) (hyps : Array Expr)
     (traceOnly := false) : MetaM (Except MVarId (Expr)) := do
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges, nodes) ← parseContext only hyps (← g.getType)
-    match ← dfs_outer v₁ v₂ edges nodes with
-    | some path_to_dest => match (proof_from_path path_to_dest) with
+    match ← dfsOuter v₁ v₂ edges nodes traceOnly with
+    | some pathToDest => match (proofFromPath pathToDest) with
       | none => return (.error g)
-      | some proof_program => return (.ok (← proof_program))
-
-      -- -- logInfo "Path: "
-      -- -- for hyp in path_to_dest do
-      -- --   logInfo f!"{← delab hyp.1}"
-      -- let mut new_goal ← mkAppM ``LE.le #[v₁, v₁] -- new_goal = v₁ ≤ v₁
-      -- logInfo f!"{← Lean.Meta.ppExpr new_goal}"
-      -- for edge in path_to_dest do
-      --  logInfo f!"{← delab edge.1}"
-      --   if let some (_, _, _) := (edge.1).le? then
-      --     new_goal := ← mkAppM ``le_trans #[new_goal, edge.1] -- transitivity
-      --   else if let some (_,_,_) := (edge.1).eq? then
-      --     new_goal := ← mkAppM ``Eq.subst #[edge.1, new_goal] -- substitute equality into prev ineq
-      --  logInfo f!"{← Lean.Meta.ppExpr new_goal}"
-      -- -- logInfo f!"{← delab edge.2.2}"
-      -- pure (.ok new_goal)
+      | some proofProgram =>
+      return (.ok (← proofProgram))
     | none => return (Except.error g)
 
 syntax "partiarith" (&" only")? (" [" term,* "]")? : tactic
@@ -207,24 +191,9 @@ elab_rules : tactic
     let traceMe ← Lean.isTracingEnabledFor `Meta.Tactic.partiarith
     let g ← getMainGoal
     match ← partiarith g onlyTk.isSome hyps traceMe with
-    | .ok new_goal =>
-      logInfo f!"{← Lean.Meta.ppExpr new_goal}"
-      Lean.Elab.Tactic.closeMainGoal `partiarith new_goal
-      --g.assign new_goal
-      --if !traceMe then Lean.Elab.Tactic.closeMainGoal `partiarith proof
+    | .ok newGoal =>
+      if traceMe then logInfo f!"{← delab newGoal}"
+      Lean.Elab.Tactic.closeMainGoal `partiarith newGoal
     | .error g => replaceMainGoal [g]
 
 end Mathlib.Tactic.Partiarith
-
--- NEXT STEP
--- look at what polyrith does
--- syntax, elaborator
--- def mainBody
-
--- recognizer for GE (similar to eq in Lean.Util.Recognizers)
-
--- def dfs
-
-
-
--- parseContext first steps should look pretty similar to polyrith
