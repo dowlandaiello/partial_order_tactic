@@ -37,5 +37,5 @@ def match_le (e: Expr) :
     else
       return none
 
-
-
+example [PartialOrder α] (x y z : α) (h : x < y) (h2 : y ≤ z) : x < z := by
+  partiarith

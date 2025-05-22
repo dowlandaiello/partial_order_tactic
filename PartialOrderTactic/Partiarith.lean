@@ -211,7 +211,7 @@ def partiarith (g : MVarId) (only : Bool) (is_bfs : Bool) (hyps : Array Expr)
       return (.ok (← proofProgram))
     | none => return (Except.error g)
 
-syntax "partiarith" (&" only")? ("bfs")? (" [" term,* "]")? : tactic
+syntax "partiarith" (&" only")? (&" bfs")? (" [" term,* "]")? : tactic
 
 open Elab Tactic
 elab_rules : tactic
@@ -226,6 +226,3 @@ elab_rules : tactic
     | .error g => replaceMainGoal [g]
 
 end Mathlib.Tactic.Partiarith
-
-example [PartialOrder ℝ] (x y z : ℝ) (h : x < y) (h2 : y ≤ z) : x < z := by
-  partiarith
