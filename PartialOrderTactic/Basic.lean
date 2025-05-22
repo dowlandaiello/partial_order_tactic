@@ -38,5 +38,4 @@ def match_le (e: Expr) :
       return none
 
 
-example {α : Type} [PartialOrder α] (x y z : α) (h : x < y) (h2 : y ≤ z) : x < z := by
-partiarith
+
