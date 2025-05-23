@@ -149,8 +149,8 @@ def dfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))
   return path
 
 def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr × (Expr × Expr))) (path : Array (Expr × (Expr × Expr))) (edges : Array (Expr × (Expr × Expr))) (_h : domain.size ≠ 0) : OptionT MetaM $ Array (Expr × (Expr × Expr)) := do
-  let in_domain ← to_visit.filterM (λe => domain.anyM (λe' => isDefEq e.2.2 e'))
-  let lift {α : Type} (o : Option α) := OptionT.mk (pure o)
+  let in_domain ← to_visit.filterM λe => domain.anyM (isDefEq e.2.2 .)
+  let lift {α : Type} (o : Option α) := OptionT.mk $ pure o
 
   match in_domain with
     | List.nil => lift none
@@ -160,8 +160,8 @@ def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr
       if ← isDefEq x.2.2 v₂ then
         lift $ some path'
       else
-        let children ← edges.filterM (λe => isDefEq e.2.1 x.2.2)
-        let domain' := domain.feraseIdx (← lift (domain.indexOf? $ x.2.2))
+        let children ← edges.filterM λe => isDefEq e.2.1 x.2.2
+        let domain' := domain.feraseIdx $ ← domain.indexOf? x.2.2|> lift
         if h₁ : domain'.size ≠ 0 then
           bfs v₁ v₂ domain' (xs ++ children.toList) path' edges h₁
         else
