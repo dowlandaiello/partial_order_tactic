@@ -155,13 +155,15 @@ def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr
   match in_domain with
     | List.nil => lift none
     | List.cons x xs =>
+      let path' := path ++ [x]
+
       if ← isDefEq x.2.2 v₂ then
-        lift (some (path ++ [x]))
+        lift $ some path'
       else
         let children ← edges.filterM (λe => isDefEq e.2.1 x.2.2)
         let domain' := domain.feraseIdx (← lift (domain.indexOf? $ x.2.2))
         if h₁ : domain'.size ≠ 0 then
-          bfs v₁ v₂ domain' (xs ++ children.toList) (path ++ [x]) edges h₁
+          bfs v₁ v₂ domain' (xs ++ children.toList) path' edges h₁
         else
           lift none
 termination_by domain.size
