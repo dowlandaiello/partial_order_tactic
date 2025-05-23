@@ -208,7 +208,6 @@ def partiarith (g : MVarId) (only : Bool) (is_bfs : Bool) (hyps : Array Expr)
     | some pathToDest => match (proofFromPath pathToDest) with
       | none => return (.error g)
       | some proofProgram =>
-       logInfo f!"{repr (← proofProgram)}"
        return (.ok (← proofProgram))
     | none => return (Except.error g)
 
