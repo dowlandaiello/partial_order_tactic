@@ -148,23 +148,22 @@ def dfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))
   -- if trace then logInfo traceString
   return path
 
-def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List Expr) (path : Array (Expr × (Expr × Expr))) (edges : Array (Expr × (Expr × Expr))) (_h : domain.size ≠ 0) : OptionT MetaM $ Array (Expr × (Expr × Expr)) := do
-  let in_domain ← to_visit.filterM (λe => domain.anyM (λe' => do isDefEq e e'))
+def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr × (Expr × Expr))) (path : Array (Expr × (Expr × Expr))) (edges : Array (Expr × (Expr × Expr))) (_h : domain.size ≠ 0) : OptionT MetaM $ Array (Expr × (Expr × Expr)) := do
+  let in_domain ← to_visit.filterM (λe => domain.anyM (λe' => isDefEq e.2.2 e'))
   let lift {α : Type} (o : Option α) := OptionT.mk (pure o)
 
   match in_domain with
-    | List.nil =>
-      if (← lift path[0]?).2.1 == (← lift path.toList.getLast?).2.2 then
-        pure edges
-      else
-        lift none
+    | List.nil => lift none
     | List.cons x xs =>
-      let children ← edges.filterMapM (λe => do if (← isDefEq e.2.1 x) then pure $ some e.2.1 else pure none)
-      let domain' := domain.feraseIdx (← lift (domain.indexOf? x))
-      if h₁ : domain'.size ≠ 0 then
-        bfs v₁ v₂ domain' (xs ++ children.toList) path edges h₁
+      if ← isDefEq x.2.2 v₂ then
+        lift (some (path ++ [x]))
       else
-        lift none
+        let children ← edges.filterM (λe => isDefEq e.2.1 x.2.2)
+        let domain' := domain.feraseIdx (← lift (domain.indexOf? $ x.2.2))
+        if h₁ : domain'.size ≠ 0 then
+          bfs v₁ v₂ domain' (xs ++ children.toList) (path ++ [x]) edges h₁
+        else
+          lift none
 termination_by domain.size
 decreasing_by (
   rw [Array.size_feraseIdx]
@@ -174,7 +173,8 @@ decreasing_by (
 def bfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))) (nodes : Array Expr)
     (trace := false) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
     if h : nodes.size ≠ 0 then
-      bfs v₁ v₂ nodes [v₁] ⟨[]⟩ edges h
+      let children ← edges.filterM (λe => isDefEq e.2.1 v₁)
+      bfs v₁ v₂ nodes children.toList ⟨[]⟩ edges h
     else
       pure none
 
@@ -204,11 +204,12 @@ def partiarith (g : MVarId) (only : Bool) (is_bfs : Bool) (hyps : Array Expr)
     (traceOnly := false) : MetaM (Except MVarId (Expr)) := do
     g.withContext <| AtomM.run .reducible do
     let (v₁, v₂, edges, nodes) ← parseContext only hyps (← g.getType)
-    match ← (if is_bfs then dfsOuter else bfsOuter) v₁ v₂ edges nodes with
+    match ← (if is_bfs then bfsOuter else dfsOuter) v₁ v₂ edges nodes with
     | some pathToDest => match (proofFromPath pathToDest) with
       | none => return (.error g)
       | some proofProgram =>
-      return (.ok (← proofProgram))
+       logInfo f!"{repr (← proofProgram)}"
+       return (.ok (← proofProgram))
     | none => return (Except.error g)
 
 syntax "partiarith" (&" only")? (&" bfs")? (" [" term,* "]")? : tactic
