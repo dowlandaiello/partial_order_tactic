@@ -148,13 +148,13 @@ def dfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))
   -- if trace then logInfo traceString
   return path
 
-def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr × (Expr × Expr))) (path : Array (Expr × (Expr × Expr))) (edges : Array (Expr × (Expr × Expr))) (_h : domain.size ≠ 0) : OptionT MetaM $ Array (Expr × (Expr × Expr)) := do
-  let in_domain ← to_visit.filterM λe => domain.anyM (isDefEq e.2.2 .)
+def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List $ (Expr × (Expr × Expr)) × Array (Expr × (Expr × Expr))) (edges : Array (Expr × (Expr × Expr))) (_h : domain.size ≠ 0) : OptionT MetaM $ Array (Expr × (Expr × Expr)) := do
+  let in_domain ← to_visit.filterM λe => domain.anyM (isDefEq e.1.2.2 .)
   let lift {α : Type} (o : Option α) := OptionT.mk $ pure o
 
   match in_domain with
     | List.nil => lift none
-    | List.cons x xs =>
+    | List.cons ⟨x, path⟩ xs =>
       let path' := path ++ [x]
 
       if ← isDefEq x.2.2 v₂ then
@@ -163,7 +163,7 @@ def bfs (v₁ : Expr) (v₂ : Expr) (domain : Array Expr) (to_visit : List (Expr
         let children ← edges.filterM λe => isDefEq e.2.1 x.2.2
         let domain' := domain.feraseIdx $ ← domain.indexOf? x.2.2|> lift
         if h₁ : domain'.size ≠ 0 then
-          bfs v₁ v₂ domain' (xs ++ children.toList) path' edges h₁
+          bfs v₁ v₂ domain' (xs ++ (children.toList.map λe => ⟨e, path'⟩)) edges h₁
         else
           lift none
 termination_by domain.size
@@ -174,9 +174,10 @@ decreasing_by (
 
 def bfsOuter (v₁ : Expr) (v₂ : Expr) (edges : Array (Expr × (Expr × Expr))) (nodes : Array Expr)
     (trace := false) : MetaM (Option (Array (Expr × (Expr × Expr)))) := do
-    if h : nodes.size ≠ 0 then
-      let children ← edges.filterM (λe => isDefEq e.2.1 v₁)
-      bfs v₁ v₂ nodes children.toList ⟨[]⟩ edges h
+    let nodes' := nodes.erase v₁
+    if h : nodes'.size ≠ 0 then
+      let children ← edges.filterM λe => isDefEq e.2.1 v₁
+      bfs v₁ v₂ nodes' (children.toList.map λe => ⟨e, ⟨[]⟩⟩) edges h
     else
       pure none
 
